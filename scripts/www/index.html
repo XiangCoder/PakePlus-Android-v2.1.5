@@ -1,11 +1,520 @@
 <!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>PakePlus</title>
-    </head>
-    <body>
-        PakePlus
-    </body>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EasyCamera PRO | 虚拟灯光实验室</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+
+        :root {
+            --accent: #fbbf24;
+            --danger: #ef4444;
+            --bg-dark: #0a0a0a;
+            --glass-white: rgba(255, 255, 255, 0.05);
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: #e5e7eb;
+            font-family: 'Inter', -apple-system, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        /* 视口布局 */
+        .camera-viewport {
+            position: relative;
+            width: 100vw;
+            height: 50vh;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #raw-video { display: none; }
+        #render-canvas { width: 100%; height: 100%; object-fit: cover; }
+
+        /* 参考视频 */
+        #ref-video-box {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 140px;
+            aspect-ratio: 9/16;
+            background: #000;
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            overflow: hidden;
+            z-index: 40;
+            display: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        #ref-video { width: 100%; height: 100%; object-fit: cover; }
+
+        /* 打光 HUD 标记 */
+        .light-marker {
+            position: absolute;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 35;
+        }
+        .light-icon {
+            width: 24px; height: 24px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: black; font-size: 10px;
+            box-shadow: 0 0 15px var(--accent);
+        }
+        .light-label {
+            margin-top: 4px;
+            padding: 2px 6px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 4px;
+            font-size: 9px;
+            color: white;
+            white-space: nowrap;
+        }
+
+        /* 打光说明卡片 */
+        #lighting-info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            max-width: 200px;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(10px);
+            padding: 10px;
+            border-radius: 8px;
+            border-left: 3px solid var(--accent);
+            z-index: 40;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* 控制面板 */
+        .control-panel {
+            height: 50vh;
+            background: #111;
+            display: flex;
+            flex-direction: column;
+            border-top: 1px solid var(--border);
+            padding: 16px;
+        }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        
+        /* 自定义滑动轨道 */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 2px; background: rgba(255,255,255,0.1); }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; margin-top: -6px; }
+
+        .btn-tab { font-size: 12px; font-weight: 600; padding: 6px 0; color: #666; position: relative; }
+        .btn-tab.active { color: var(--accent); }
+        .btn-tab.active::after { content: ''; position: absolute; bottom: 0; left: 0; width: 100%; height: 2px; background: var(--accent); }
+
+        .shutter-btn {
+            width: 60px; height: 60px;
+            border: 3px solid white;
+            border-radius: 50%;
+            padding: 4px;
+            cursor: pointer;
+        }
+        .shutter-inner { width: 100%; height: 100%; background: white; border-radius: 50%; transition: 0.2s; }
+        .shutter-btn:active .shutter-inner { transform: scale(0.9); }
+
+        .rec-btn {
+            width: 48px; height: 48px;
+            border: 3px solid white;
+            border-radius: 50%;
+            padding: 4px;
+            cursor: pointer;
+        }
+        .rec-inner { width: 100%; height: 100%; background: var(--danger); border-radius: 50%; transition: 0.3s; }
+        .rec-btn.recording .rec-inner { border-radius: 4px; transform: scale(0.5); }
+    </style>
+</head>
+<body>
+
+    <!-- 录制 HUD -->
+    <div id="rec-hud" class="fixed top-6 left-1/2 -translate-x-1/2 hidden z-[100] items-center gap-3 bg-red-600 px-4 py-1.5 rounded-full shadow-lg">
+        <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+        <span id="rec-time" class="font-mono text-sm font-bold text-white">00:00</span>
+    </div>
+
+    <!-- 主视口 -->
+    <div class="camera-viewport">
+        <video id="raw-video" autoplay playsinline muted></video>
+        <canvas id="render-canvas"></canvas>
+
+        <!-- 打光光源 HUD (JS 动态生成) -->
+        <div id="lights-hud-container" class="absolute inset-0 pointer-events-none"></div>
+
+        <!-- 参考视频预览框 -->
+        <div id="ref-video-box">
+            <video id="ref-video" loop muted playsinline></video>
+        </div>
+
+        <!-- 打光说明 -->
+        <div id="lighting-info" class="hidden">
+            <h4 class="text-amber-400 text-[10px] font-bold uppercase tracking-widest mb-1" id="light-title">伦勃朗光</h4>
+            <p class="text-[9px] text-gray-300 leading-relaxed" id="light-desc">通过 45 度角侧光在背光侧面颊形成倒三角高光，极具艺术感。</p>
+        </div>
+
+        <!-- 悬浮快捷键 -->
+        <div class="absolute right-4 top-10 flex flex-col gap-4 z-50">
+            <button onclick="toggleMirror()" class="w-10 h-10 rounded-full bg-black/40 backdrop-blur border border-white/10 flex items-center justify-center">
+                <i class="fas fa-arrows-left-right text-xs"></i>
+            </button>
+            <button onclick="document.getElementById('video-upload').click()" class="w-10 h-10 rounded-full bg-black/40 backdrop-blur border border-white/10 flex items-center justify-center text-amber-400">
+                <i class="fas fa-video text-xs"></i>
+            </button>
+            <input type="file" id="video-upload" class="hidden" accept="video/*" onchange="loadRefVideo(this)">
+        </div>
+    </div>
+
+    <!-- 控制面板 -->
+    <div class="control-panel">
+        <div class="flex gap-6 mb-6">
+            <button onclick="setTab('light')" id="tab-light" class="btn-tab active">专业打光</button>
+            <button onclick="setTab('color')" id="tab-color" class="btn-tab">色彩参数</button>
+            <button onclick="setTab('gallery')" id="tab-gallery" class="btn-tab">媒体库</button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto no-scrollbar">
+            <!-- 1. 打光面板 -->
+            <div id="panel-light" class="space-y-6">
+                <div class="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                    <button onclick="applyLighting('none', this)" class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[11px] whitespace-nowrap active-light">无灯光</button>
+                    <button onclick="applyLighting('rembrandt', this)" class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[11px] whitespace-nowrap">伦勃朗光</button>
+                    <button onclick="applyLighting('butterfly', this)" class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[11px] whitespace-nowrap">蝴蝶光</button>
+                    <button onclick="applyLighting('split', this)" class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[11px] whitespace-nowrap">阴阳脸</button>
+                    <button onclick="applyLighting('rim', this)" class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[11px] whitespace-nowrap">轮廓光</button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <div class="flex justify-between text-[10px] text-gray-500 mb-2"><span>全局光亮度</span><span id="txt-val-light-br">100%</span></div>
+                        <input type="range" min="50" max="150" value="100" oninput="updateLight('br', this.value)">
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-[10px] text-gray-500 mb-2"><span>阴影硬度</span><span id="txt-val-light-sh">100%</span></div>
+                        <input type="range" min="50" max="200" value="100" oninput="updateLight('con', this.value)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. 色彩面板 -->
+            <div id="panel-color" class="hidden grid grid-cols-2 gap-x-6 gap-y-4">
+                <div>
+                    <div class="text-[10px] text-gray-500 mb-2">曝光</div>
+                    <input type="range" min="-50" max="50" value="0" oninput="updateParam('br', this.value)">
+                </div>
+                <div>
+                    <div class="text-[10px] text-gray-500 mb-2">色温</div>
+                    <input type="range" min="-50" max="50" value="0" oninput="updateParam('temp', this.value)">
+                </div>
+                <div class="col-span-2">
+                    <div class="text-[10px] text-gray-500 mb-2">滤镜强度</div>
+                    <input type="range" min="0" max="100" value="100" oninput="updateParam('strength', this.value)">
+                </div>
+            </div>
+
+            <!-- 3. 媒体库 -->
+            <div id="panel-gallery" class="hidden">
+                <div id="gallery-list" class="flex gap-4 overflow-x-auto no-scrollbar py-2">
+                    <p class="text-[10px] text-gray-600 w-full text-center py-10">暂无拍摄记录</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部快门栏 -->
+        <div class="flex items-center justify-between mt-auto pt-4">
+            <div id="last-media" class="w-12 h-12 rounded-xl bg-white/5 border border-white/10 overflow-hidden"></div>
+            
+            <div class="flex items-center gap-6">
+                <div id="btn-rec" class="rec-btn" onclick="toggleRecording()">
+                    <div class="rec-inner"></div>
+                </div>
+                <div class="shutter-btn" onclick="takePhoto()">
+                    <div class="shutter-inner"></div>
+                </div>
+            </div>
+
+            <button onclick="downloadLatest()" class="w-12 h-12 flex items-center justify-center text-gray-500">
+                <i class="fas fa-download text-lg"></i>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- 核心配置 ---
+        const state = {
+            isRecording: false,
+            mirror: false,
+            facingMode: 'user',
+            currentLighting: 'none',
+            params: { br: 0, temp: 0, con: 0, strength: 100 },
+            lights: { br: 100, con: 100 },
+            media: []
+        };
+
+        const lightingTemplates = {
+            none: { title: "", desc: "", nodes: [] },
+            rembrandt: {
+                title: "伦勃朗光 (Rembrandt)",
+                desc: "经典的 45° 侧光，在暗部面颊形成三角光，塑造面部立体感。",
+                nodes: [{ x: '25%', y: '30%', label: 'Key: 45° 主灯' }, { x: '75%', y: '50%', label: 'Fill: 补光板' }]
+            },
+            butterfly: {
+                title: "蝴蝶光 (Paramount)",
+                desc: "主灯位于正前方高位，在鼻子下方形成蝴蝶形状阴影，多用于时尚人像。",
+                nodes: [{ x: '50%', y: '15%', label: 'Key: 正高位主灯' }, { x: '50%', y: '85%', label: 'Reflector: 下反光' }]
+            },
+            split: {
+                title: "阴阳脸 (Split)",
+                desc: "光线从 90° 侧面射入，将脸部分为明暗两半，极具戏剧张力。",
+                nodes: [{ x: '5%', y: '50%', label: 'Key: 90° 强侧光' }]
+            },
+            rim: {
+                title: "轮廓光 (Rim Light)",
+                desc: "灯光位于人物后侧，勾勒出头发和身体的线条，与背景分离。",
+                nodes: [{ x: '80%', y: '20%', label: 'Rim: 后侧轮廓灯' }, { x: '30%', y: '60%', label: 'Fill: 弱前光' }]
+            }
+        };
+
+        const video = document.getElementById('raw-video');
+        const canvas = document.getElementById('render-canvas');
+        const ctx = canvas.getContext('2d');
+        const refVideo = document.getElementById('ref-video');
+        const refVideoBox = document.getElementById('ref-video-box');
+
+        let mediaRecorder;
+        let chunks = [];
+        let recInterval;
+
+        // --- 初始化摄像头 ---
+        async function initCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: state.facingMode, width: 1280, height: 720 },
+                audio: true 
+            });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                requestAnimationFrame(renderLoop);
+            };
+        }
+
+        // --- 渲染循环 (包含打光效果模拟) ---
+        function renderLoop() {
+            ctx.save();
+            
+            // 镜像处理
+            if (state.mirror) {
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+            }
+
+            // 基础滤镜
+            const p = state.params;
+            const l = state.lights;
+            ctx.filter = `brightness(${l.br + p.br}%) contrast(${l.con + p.con}%) hue-rotate(${p.temp}deg)`;
+
+            // 绘制画面
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // 虚拟打光叠加 (通过渐变层模拟)
+            if (state.currentLighting !== 'none') {
+                applyLightOverlay(ctx, state.currentLighting);
+            }
+
+            ctx.restore();
+            requestAnimationFrame(renderLoop);
+        }
+
+        function applyLightOverlay(c, type) {
+            const w = canvas.width;
+            const h = canvas.height;
+            let grad;
+
+            if (type === 'rembrandt') {
+                grad = c.createRadialGradient(w*0.3, h*0.3, 0, w*0.3, h*0.3, w*0.8);
+                grad.addColorStop(0, 'rgba(255,255,240,0.15)');
+                grad.addColorStop(1, 'rgba(0,0,0,0.3)');
+            } else if (type === 'split') {
+                grad = c.createLinearGradient(0, 0, w, 0);
+                grad.addColorStop(0, 'rgba(255,255,255,0.1)');
+                grad.addColorStop(0.5, 'rgba(0,0,0,0.4)');
+            } else if (type === 'butterfly') {
+                grad = c.createRadialGradient(w*0.5, h*0.2, 0, w*0.5, h*0.2, h*0.7);
+                grad.addColorStop(0, 'rgba(255,255,255,0.15)');
+                grad.addColorStop(1, 'rgba(0,0,0,0.2)');
+            }
+
+            if(grad) {
+                c.globalCompositeOperation = 'overlay';
+                c.fillStyle = grad;
+                c.fillRect(0, 0, w, h);
+                c.globalCompositeOperation = 'source-over';
+            }
+        }
+
+        // --- 打光模板切换 ---
+        function applyLighting(type, btn) {
+            state.currentLighting = type;
+            const config = lightingTemplates[type];
+            
+            // 更新 UI
+            document.querySelectorAll('#panel-light button').forEach(b => b.classList.remove('border-amber-400', 'text-amber-400', 'bg-amber-400/10'));
+            btn.classList.add('border-amber-400', 'text-amber-400', 'bg-amber-400/10');
+
+            // 更新说明卡
+            const info = document.getElementById('lighting-info');
+            if(type === 'none') {
+                info.classList.add('hidden');
+            } else {
+                info.classList.remove('hidden');
+                document.getElementById('light-title').innerText = config.title;
+                document.getElementById('light-desc').innerText = config.desc;
+            }
+
+            // 更新光源 HUD
+            const hud = document.getElementById('lights-hud-container');
+            hud.innerHTML = '';
+            config.nodes.forEach(node => {
+                const marker = document.createElement('div');
+                marker.className = 'light-marker';
+                marker.style.left = node.x;
+                marker.style.top = node.y;
+                marker.innerHTML = `
+                    <div class="light-icon"><i class="fas fa-lightbulb"></i></div>
+                    <div class="light-label">${node.label}</div>
+                `;
+                hud.appendChild(marker);
+            });
+        }
+
+        // --- 录制逻辑 (同步参考视频) ---
+        function toggleRecording() {
+            if (state.isRecording) {
+                stopRec();
+            } else {
+                startRec();
+            }
+        }
+
+        function startRec() {
+            // 1. 同步参考视频：重置并播放
+            if (refVideo.src) {
+                refVideo.currentTime = 0;
+                refVideo.play();
+            }
+
+            // 2. 捕获 Canvas 流
+            const stream = canvas.captureStream(30);
+            const audioTracks = video.srcObject.getAudioTracks();
+            if(audioTracks.length) stream.addTrack(audioTracks[0]);
+
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            chunks = [];
+            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            mediaRecorder.onstop = saveMedia;
+
+            mediaRecorder.start();
+            state.isRecording = true;
+            
+            document.getElementById('btn-rec').classList.add('recording');
+            document.getElementById('rec-hud').style.display = 'flex';
+            
+            let start = Date.now();
+            recInterval = setInterval(() => {
+                const s = Math.floor((Date.now() - start)/1000);
+                document.getElementById('rec-time').innerText = `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+            }, 1000);
+        }
+
+        function stopRec() {
+            mediaRecorder.stop();
+            if (refVideo.src) refVideo.pause();
+            state.isRecording = false;
+            document.getElementById('btn-rec').classList.remove('recording');
+            document.getElementById('rec-hud').style.display = 'none';
+            clearInterval(recInterval);
+        }
+
+        function saveMedia() {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const item = { url, type: 'video', name: `REC_${Date.now()}.webm` };
+            state.media.unshift(item);
+            updateGallery();
+        }
+
+        function takePhoto() {
+            const url = canvas.toDataURL('image/jpeg');
+            state.media.unshift({ url, type: 'photo', name: `IMG_${Date.now()}.jpg` });
+            updateGallery();
+            
+            // 闪光
+            const f = document.createElement('div');
+            f.className = 'fixed inset-0 bg-white z-[100] transition-opacity duration-300';
+            document.body.appendChild(f);
+            setTimeout(() => { f.style.opacity = 0; setTimeout(()=>f.remove(), 300); }, 50);
+        }
+
+        // --- 参考视频加载 ---
+        function loadRefVideo(input) {
+            if(input.files && input.files[0]) {
+                const url = URL.createObjectURL(input.files[0]);
+                refVideo.src = url;
+                refVideoBox.style.display = 'block';
+                showToast("参考视频已载入，录制时将同步启动");
+            }
+        }
+
+        // --- 其它工具 ---
+        function updateGallery() {
+            const list = document.getElementById('gallery-list');
+            const last = document.getElementById('last-media');
+            if(state.media.length === 0) return;
+
+            const item = state.media[0];
+            last.innerHTML = item.type === 'video' ? `<video src="${item.url}" muted></video>` : `<img src="${item.url}">`;
+            
+            list.innerHTML = state.media.map(m => `
+                <div class="flex-shrink-0 w-24 aspect-[3/4] bg-black rounded-lg overflow-hidden border border-white/10">
+                    ${m.type === 'video' ? `<video src="${m.url}" class="w-full h-full object-cover"></video>` : `<img src="${m.url}" class="w-full h-full object-cover">`}
+                </div>
+            `).join('');
+        }
+
+        function setTab(id) {
+            ['light', 'color', 'gallery'].forEach(t => {
+                document.getElementById('panel-'+t).classList.add('hidden');
+                document.getElementById('tab-'+t).classList.remove('active');
+            });
+            document.getElementById('panel-'+id).classList.remove('hidden');
+            document.getElementById('tab-'+id).classList.add('active');
+        }
+
+        function updateLight(k, v) { state.lights[k] = parseInt(v); document.getElementById(`txt-val-light-${k}`).innerText = v + '%'; }
+        function updateParam(k, v) { state.params[k] = parseInt(v); }
+        function toggleMirror() { state.mirror = !state.mirror; }
+        function showToast(m) { /* 简化版 */ console.log(m); }
+
+        initCamera();
+    </script>
+</body>
 </html>
